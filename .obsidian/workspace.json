@@ -93,7 +93,8 @@
       }
     ],
     "direction": "horizontal",
-    "width": 200
+    "width": 200,
+    "collapsed": true
   },
   "right": {
     "id": "380d5b5b172d8b58",
@@ -197,6 +198,7 @@
   },
   "active": "1b2ae13503b4668d",
   "lastOpenFiles": [
+    "Pasted image 20260228210130.png",
     "Pasted image 20260223155212.png",
     "Pasted image 20260223115454.png",
     "Ch3 Lexical Analysis.md",

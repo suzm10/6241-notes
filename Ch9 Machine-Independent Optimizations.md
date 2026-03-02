@@ -273,9 +273,9 @@ a set $V$ and a binary meet operator $\wedge$ such that for all $x, y, \text{ an
 3. $x \wedge (y \wedge z) = (x \wedge y) \wedge z$
 
 semilattice has a top element, $\top$, such that 
-- for all $x$ in $V$, $\top \wedge x = x$
+- for all $x$ in $V$, $\top \wedge x = x$, so $\top \geq x$ 
 semilattice may have bottom element, $\perp$, such that
-- for all $x$ in $V$, $\perp \wedge x = \perp$
+- for all $x$ in $V$, $\perp \wedge \;  x = \perp$, so $\perp \leq x$ 
 
 ### Partial Orders
 
@@ -446,4 +446,76 @@ $MOP \leq IDEAL$ and $MFP \leq MOP$
 Therefore, $MFP \leq IDEAL$
 
 # 9.4 Constant Propagation
+
+constant propagation/constant folding: replaces expressions that evaluate to the same constant every time they're executed
+
+constant-propagation framework is different because:
+- it has an unbounded set of possible dataflow values, even for a fixed flow graph
+- it's not distributive
+
+constant propagation is a forward data-flow problem
+
+## 9.4.1 Data-Flow Values for the Constant Propagation Framework
+
+set of data-flow values is a product lattice with 1 component for each variable in the program
+
+lattice for a single variable consists of:
+1. all constants appropriate for the type of variable
+2. value NAC (not-a-constant)
+3. value UNDEF: no def of the var has been discovered to reach this point
+
+- UNDEF is the top element + NAC is the bottom element
+NAC $\leq$ constant values $\leq$ UNDEF
+
+So $UNDEF \wedge v = v$  and $NAC \wedge v = NAC$
+
+for any constant $c$, $c \wedge c = c$
+
+for distinct constants: $c_1 \wedge c_2 = NAC$
+
+## 9.4.3 Transfer Functions for the Constant-Propagation Framework
+
+semi-lattice of data-flow values is the product of semilattices like
+
+![[Pasted image 20260228210130.png]]
+
+$m \leq m'$ iff for all variables $v$ we have $m(v) \leq m'(v)$
+
+## 9.3.4 Transfer Functions for the Constant-Propagation Framework
+
+set F: certain transfer functions that accept a map of variables to values in the constant lattice and return another such map
+
+F contains constant transfer function for ENTRY node:
+- given any input map, returns a map $m_0$ where $m_0(v) = \text{UNDEF}$ for all variables $v$
+- before executing any program statements, there are no definitions for any variables
+
+Let $f_s$ = transfer function of statement $s$
+Let $m$ and $m'$ represent data-flow values such that $m' = f_s(m)$
+
+Two things can happen:
+1. if $s$ is not an assignment statement, then $f_s$ is the identity function
+2. if $s$ is an assignment to variable $x$, then $m'(v) = m(v)$ for all variables $v \neq x$, and $m'(x)$ is defined as:
+	1. If RHS of statement $s$ is a constant $c$ then $m'(x) = c$
+	2. If RHS is of the form $y + z$
+		1. $m'(x) = m(y) + m(z)$ if $m(y)$ and $m(z)$ are constant values
+		2. NAC if either $m(y)$ or $m(z)$ is NAC
+		3. UNDEF otherwise
+3. if RHS is any other expression (func call or assignment through a pointer), then $m'(x)=NAC$
+
+## 9.4.4 Monotonicity of the Constant-Propagation Framework
+
+Consider effect of function $f_s$ on a single variable
+
+In all but case 2b), $f_s$ either doesn't change the value of $m(x)$ or it changes the map to return a constant or $NAC$ (which are $\leq$ than input)
+
+For case 2b, we see that the output value can't get larger as the input gets smaller
+
+## 9.4.5 Non-distributivity of the Constant-Propagation Framework
+
+constant propagation framework is not distributive
+
+## 9.4.6 Interpretation of the Results
+
+
+# 9.5 Partial-Redundancy Elimination
 
