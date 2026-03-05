@@ -519,3 +519,139 @@ constant propagation framework is not distributive
 
 # 9.5 Partial-Redundancy Elimination
 
+PRE = minimizing the # of expression evaluations
+
+## 9.5.1 The Sources of Redundancy
+
+3 forms of redundancy:
+1. common subexpressions
+2. loop-invariant expressions
+3. partially redundant expressions
+
+![[Pasted image 20260302162958.png]]
+
+### Global Common Subexpressions
+
+An expressions $b + c$ is fully redundant at point $p$ if it's an available expression at that point. That is, $b + c$ has been computed along all paths reaching $p$, and the variables $b$ and $c$ were not redefined after the last evaluation of $b + c$
+
+### Loop-Invariant Expressions
+
+loop-invariant code motion: moving an expression from inside the loop outside
+
+may need to be repeated b/c once you determine a variable has a loop-invariant value, expressions using that variable may also become loop-invariants
+
+loops:
+
+```
+while c {
+	S;
+}
+```
+
+are rewritten as:
+```
+if c {
+	repeat
+		S;
+	until not c
+}
+```
+
+and the loop-invariant expressions are placed just before the repeat, so we avoid computing loop-invariant expressions if the loop is never executed
+
+### Partially Redundant Expressions
+
+requires placement of new computation expressions (along paths where they originally weren't)
+- like loop-invariant code motion
+
+## 9.5.2 Can All Redundancy Be Eliminated?
+
+can we eliminate all redundant computations along every path? no unless we can change the flow graph by creating new blocks
+
+critical edge of flow graph: edge going from a node with > 1 successor to a node with > 1 predecessor
+
+eliminating all redundant expressions can greatly increase size of optimized code, so we restrict our redundancy-elimination techniques to only those that may add new new blocks but don't duplicate portions of the CFG
+
+## 9.5.3 The Lazy-Code-Motion Problem
+
+desirable properties for programs optimized with PRE:
+1. all redundant computations of expressions that can be eliminated without code duplication are eliminated
+2. optimized program doesn't perform any computation that's not in the original program execution
+3. expressions are computed at the latest possible time (minimizes register usage between time variable is defined + time it's used)
+
+lazy code motion: eliminating partial redundancy with the goal of delaying computations as much as possible
+
+### Full Redundancy
+
+an expressions $e$ in block $B$ is redundant if along all paths reaching $B$, $e$ has been evaluated + the operands haven't been redefined subsequently
+
+$S$ = set of blocks where $e$ is defined that renders $e$ in $B$ redundant
+- set of edges leaving $S$ form cutset which if removed, disconnect $B$ from the entry block
+
+### Partial Redundancy
+
+if an expression $e$ in block $B$ is only partially redundant, lazy-code motion algorithm will attempt to render $e$ fully redundant in $B$ by placing additional copies of $e$ in the flow graph
+- if successful, we'll also have a cutset from set of blocks $S$ containing $e$ and $B$
+- like the fully redundant case, no operands of $e$ are redefined along the paths that lead from blocks in $S$ to $B$
+
+## 9.5.4 Anticipation of Expressions
+
+- copies of expressions are only placed at program points where the expression is anticipated
+
+- expression $b + c$ is anticipated at point $p$ if all paths leading from $p$ compute the value of $b + c$ from the values of $b$ and $c$ that are available at that point
+
+## 9.5.5 The Lazy-Code-Motion Algorithm
+
+### Algorithm Overview
+
+1. find all expressions anticipated at each program point using a backward data-flow pass
+2. places the computation where the values of the expressions are first anticipated along some path
+	1. after we've placed copies of an expression where the expression is first anticipated, expression is ***available*** at point $p$ if it's been anticipated along all paths reaching $p$
+	2. availability solved using forward data-flow pass
+	3. to place expressions at earliest possible positions, find program points where expressions are anticipated but not available
+3. executing an expression as soon as it's anticipated may produce a value long before it's used, so we want to postpone it
+	1. an expression is ***postponable*** at a program point if it's been anticipated but not yet used along any path reaching the program point
+	2. postponable expressions are found using forward data-flow pass
+	3. place expressions at program points where they can no longer be postponed
+4. final backward data-flow pass to eliminate assignments to temporary variables that are used only once in the program
+
+### Preprocessing Steps
+
+for each block $B$, compute:
+$e\_use_B$: set of expressions computed in $B$
+$e\_kill_B$: set of expressions any of whose operands are defined in $B$ 
+
+
+### Anticipated Expressions
+
+### Available Expressions
+
+an expression is available on exit from a block if it's:
+1. either
+	1. available on entry, or
+	2. in the set of anticipated expressions upon entry (it could be made available if we choose to compute it here)
+2. not killed in the block
+
+- set of expressions placed at block $B$ = set of anticipated expressions that are not yet available b/c we don't want to recompute an available expression
+		$$earliest[B] = anticipated[B].in - available[B].in$$
+### Postponable Expressions
+
+postpones the computation of expressions as much as possible while preserving original program semantics and minimizing redundancy
+
+an expression is postponable to the exit of block $B$ if it's not used in the block and either it's postponable to the entry of $B$ or it's used in $earliest[B]$ 
+
+an expression is not postponable to the entry of a block unless all its predecessors include the expression in their postponable sets
+- meet operator is set intersection
+
+an expression $e$ is placed at the frontier (expression transitions from being postponable to not being postponable) if one of the following holds:
+1. $e$ is not in $postponable[B].out$. In other words, $e$ is in $e\_use_B$
+2. $e$ can't be postponed to one of its successors. there exists a successor of $B$ such that $e$ is not in the earliest or postponable set on entry to that successor
+$e$ can be placed at the front of block $B$ in either scenario b/c of the new blocks introduced in the preprocessing step
+
+### Used Expressions
+
+backwards pass determines if the temp variables introduced are used beyond the block that they're in
+
+an expression is used at point $p$ if there exists a path from point $p$ that uses the expression before the value is reevaluated
+
+a used expression at the exit of a block B is a used expression on entry only if it's not in the latest set
