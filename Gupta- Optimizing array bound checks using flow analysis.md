@@ -154,3 +154,57 @@ v2 = v1 - 1, 5 = 6 - 1
 ```
 typedef std::pair<Value *, SCEV *> IndexPair;
 ```
+
+# Algo for propagation
+
+assume that prior to applying algo, we've identified loops and computed use-def chains and dominator sets
+
+## Step 1: Identify candidates for propagation
+
+check C is a candidate for moving out of the loop if once executed, it need not be executed in subsequent loop iterations
+
+4 cases that identify candidates for propagation:
+1. Invariants: 
+	- A check C is a candidate for propagation if it uses only definitions from outside the loop body (C is a loop invariant). Determined from use-def information
+2. Increasing values: 
+	- A check C is a candidate for propagation if it's of the form $lb \leq i$ and if all defs of i inside the loop are of the form $i = i + c$, $i = c + i$,  $i = i * c$, or $i = c * i$, where c is a pos int const
+3. Decreasing values:
+	- A check C is a candidate for propagation if it's of the form $i \leq ub$ and if all the definitions of $i$ inside the loop are of the form $i = i - c$, $i = -c + i$, or $i = i/c$ where $c$ is a pos int const
+4. Loops with inc/dec of one:
+	- Consider a check C of the form $-lb \leq \text{i op c}, \text{i op c} \leq ub$ , where $i$ is incremented/decremented by one during each iteration, $op \in \{+, -, div, *\}$, $c$ is a const, and min and max are the min and max values taken by var $i$
+	- This check is a candidate for propagation b/c it can replaced by $lb \leq \text{min op c}, \text{max op c} \leq ub$ outside the loop
+## Step 2: Check hoisting
+
+A check that's a candidate for propagation can be propagated only if it's in a block that dominates loop exits. 
+
+So, we hoist checks from blocks that are conditionally executed to blocks that unconditionally executed during each loop iteration to increase the number of checks propagated out of a loop
+
+ND = set of blocks from which checks will be hoisted
+C(n) = contains the checks in block n that are candidates for hoisting
+
+hoist {
+	ND = {n: block n does not dominate all loop exits}
+	for each block n do
+		C(n) = {c: at the entry to n we can assert that candidate check c will be executed in n}
+	od
+	change = true
+	while change do
+		change = false
+		for each block $n \in Succ(n) \cap ND \neq \emptyset \wedge n$  is the unique predecessor of nodes in $Succ(n)$ do
+			 prop = $\bigwedge_{S \in Succ(n)} C(s)$
+			 if prop $\neq \emptyset$ then
+				 change = true
+				 hoist checks in prop to n
+				 for each check $c \in prop$ do
+					 if $c \in S$, $S \in Succ(n)$ then eliminate c from S fi
+				 od
+			 fi
+		 od
+	od
+}
+
+## Step 3: Propagate checks out of the loop
+
+propagate all candidate checks from blocks that dominate all loop exits
+according to step 1, some checks are modified, but others propagate unchanged
+
