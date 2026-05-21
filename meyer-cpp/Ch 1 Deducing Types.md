@@ -795,3 +795,635 @@ template type deduction deduces int for `0` and `NULL` instead of a pointer type
 
 ## Item 9: Prefer alias declarations to typedefs
 
+here's a typedef:
+
+```
+typedef std::unique_ptr<std::unordered_map<std::string, std::string>> UptrMapSS;
+```
+
+C++11 also offers alias declarations that do the same thing:
+
+```
+using UPtrMapSS = std::unique_ptr<std::unordered_map<std::string, std::string>>;
+```
+
+alias declarations are easier to deal with when it comes to types involving function pointers:
+
+```
+typedef void (*FP)(int, const std::string&);
+```
+
+same as:
+```
+using FP = void (*)(int, const std::string&);
+```
+
+alias declarations may be templatized (alias templates), but typedefs cannot
+
+consider defining a synonym for a LL that uses a custom allocator, `MyAlloc`
+
+```
+template<typename T>
+using MyAllocList = std::list<T, MyAlloc<T>>;
+// MyAllocList<T> is a synonym for std::list<T, MyAlloc<T>>
+
+MyAllocList<Widget> lw; // client code
+```
+
+using a typedef is more work:
+```
+template<typename T>
+struct MyAllocList {
+	typedef std::list<T, MyAlloc<T>> type;
+};
+// MyAllocList<T> is synonym for std::list<T, MyAlloc<T>> type;
+
+MyAllocList<Widget>::type lw;
+```
+
+if you want to use typedefs inside a template for the purpose of creating a LL holding objects of type T, you have to use typename because `MyAllocList<T>::type` is a dependent type (its type is dependent on a  template type parameter `T`):
+```
+template<typename T>
+class Widget {
+private:
+	typename MyAllocList<T>::type list;
+}
+
+// Widget<T> contains a MyAllocList<T> member
+```
+
+if `MyAllocList` is defined as an alias template, we don't need `typename`
+
+```
+template<typename T>
+using MyAllocList = std::list<T, MyAlloc<T>>;
+
+template<typename T>
+class Widget {
+private:
+	MyAllocList<T> list;
+}
+```
+
+`MyAllocList<T>` is non-dependent type, so the `typename` specifier is not needed or allowed. Compilers know `MyAllocList<T>` is the name of a type because `MyAllocList` is an alias template (alias templates must name a type).
+
+When compilers see `MyAllocList<T>::type` in the `Widget` template, they can't know for sure that it names a type because there might be specialization of `MyAllocList` that names something other than a type
+
+C++11 gives you the tools to perform type transformations in the form of type traits, template insider the header `<type_traits>`
+
+Given a type `T` to which you'd like to apply a transformation,  the resulting type is `std::transformation<T>::type`:
+```
+std::remove_const<T>::type // yields T from const T
+std::remove_reference<T>::type // yields T from T& and T&&
+std::add_lvalue_reference<T>::type // yields T& from T
+```
+
+If you applied these to a type parameter inside a template, you'd have to precede it with `typename` because in C++11, type traits are implemented as typedefs inside templatized structs
+
+In C++14, there's a corresponding alias template named `std::transformation_t` for each C++11 `std::transformation<T>::type`
+
+```
+std::remove_const_t<T>
+
+std::remove_reference_t<T>
+
+std:add_lvalue_reference_t<T>
+```
+
+In C++11, implementing these yourself is very easy:
+```
+template<class T>
+using remove_const_t = typename remove_const<T>::type;
+
+template<class T>
+using remove_reference_t = typename remove_reference<T>::type;
+
+template<class T>
+using add_lvalue_reference_t = typename add_lvalue_reference<T>::type;
+```
+
+## Item 10: Prefer scoped enums to unscoped enums
+
+for C++98-style enums, the names of enums belong to the scope containing the enum, so nothing else in that scope may have the same name:
+
+```
+enum Color { black, white, red }; // black, white, red in same scope as Color
+auto white = false; // error! white already declared in this scope
+```
+
+unscoped enums: leak into the scope containing their enum def
+
+scoped enums: don't leak names this way, declared via enum class, aka enum classes
+
+```
+enum class Color { black, white, red }; // black, white, red are scoped to Color
+auto white = false; // fine, not other white in scope
+Color c = white; // error! no enum named white in this scope
+Color c = Color::white; // fine
+auto c = Color::white; // fine
+```
+
+another advantage: scoped enums enumerators are much more strongly typed
+- enumerators for unscoped enums implicitly convert to integral types
+
+another advantage: scoped enums may be forward-declared (named declared without specifying enumerators)
+```
+enum Color; // error
+enum class Color; // fine
+```
+
+for un-scoped enums, compilers want to choose the smallest underlying type for an enum that's sufficient to represent its range of enumerator values, before enum is used
+
+being able to forward-declare enums in C++11 eliminates having to recompile an entire system when only 1 new value is introduced to an enum that isn't used inside a function that takes that enum
+
+how can C++11's enums get away with forward declarations but C++98's enums can't? the underlying type for a scoped enum is always known
+
+the underlying type for scoped enums is `int`, but you can change it:
+```
+enum class Status; // ints
+enum class Status: std::uint32_t; // changed underlying type for Status
+```
+
+you can do the same thing for an unscoped enum, and the result may be forward-declared:
+```
+enum Color: std::uint8_t;
+enum class Status: std::uint32_t { good = 0, 
+								   failed = 1, 
+								   incomplete = 100, 
+								   corrupt = 200, 
+								   audited = 500, 
+								   indeterminate = 0xFFFFFFFF };
+```
+
+scoped enums help avoid namespace pollution + nonsensical type conversions, but there's 1 situation where unscoped enums may be useful:
+
+```
+enum UserInfoFields { uiName, uiEmail, uiReputation };
+UserInfor uInfo;
+
+auto val = std::get<uiEmail>(uInfo);
+```
+
+this works because of the implicit conversion from `userInfoFields` to `std::size_t`. using a scoped enum would be more verbose
+
+using a scoped enum is more typing because it requires a cast to pass into `std::get`:
+
+```
+enum class UserInfoFields { uiName, uiEmail, uiReputation };
+
+UserInfo uInfo;
+
+auto val = std::get<static_cast<std::size_t>(UserInfoFields::uiEmail)>(uInfo);
+```
+
+or you can write a function to perform the cast:
+```
+template<typename E>
+constexpr auto 
+	toUType(E enumerator) noexcept
+{
+	return static_cast<std::underlying_type_t<E>>(enumerator);
+}
+```
+
+`toUType` permits us to access a field of the tuple like this:
+```
+auto val = std::get<toUType(UserInfoFields::uiEmail)>(uInfo);
+```
+
+## Item 11: Prefer deleted functions to private undefined ones
+
+C++98 approach to preventing use of these functions is to declare them private + not define them
+
+to render istream + ostream classes uncopyable, `basic_ios` (the parent class) is defined like this:
+
+```
+template<class charT, class traits = char_traits<charT> >
+class basic_ios : public ios_base {
+public:
+	...
+private:
+	basic_ios(const basic_ios& ); // not defined
+	basic_ios& operator=(const basic_ios&); // not defined
+};
+```
+
+declaring functions private prevents clients from calling them. if member functions of friends of the class use them, linking will fail due to missing function definitions
+
+In C++11, you can achieve the same thing with  `= delete` to mark the copy constructor and the copy assignment operator as deleted functions
+
+```
+template <class charT, class traits = char_traits<charT> >
+class basic_ios : public ios_base {
+public:
+	... // deleted funcs are declare public, not private, by convention
+	basic_ios(const basic_ios& ) = delete; 
+	basic_ios& operator=(const basic_ios&) = delete;
+	...
+};
+```
+
+deleted functions may not be used in any way, so code that's in member and friend functions will fail to compile if it tries to copy `basic_ios` objects. that's an improvement over C++98 because improper usage isn't diagnosed until link-time
+
+advantage of deleted functions: any function may be deleted while only member functions may be private
+
+example: suppose we have a non-member function that takes an int + returns whether it's a lucky number, and we want to prevent calls that implicitly convert to int args
+
+```
+bool isLucky(int number);
+bool isLucky(char) = delete; // reject chars
+bool isLucky(bool) = delete; // reject bools
+bool isLucky(double) = delete; // reject double
+```
+
+deleted functions are taken into account during overload resolution, so undesirable calls will get rejected:
+```
+if (isLucky('a')) ... // error! call to deleted func
+is (isLucky(true)) ... // error!
+if (isLucky(3.5f)) ... // error!
+```
+
+deleted functions can also prevent use of template instantiations that should be disabled:
+```
+template<typename T>
+void processPointer(T* ptr);
+```
+
+to disable calling `processPointer` with `void *` and `char *`, use:
+
+```
+template<>
+void processPointer<void>(void *) = delete;
+
+template<>
+void processPointer<char>(char *) = delete;
+```
+
+you can also delete overloads with `const void *`, `const char *`, `const volatile void *`, and `const volatile char *` to be thorough.
+
+template specializations must be declared at namespace scope, not class scope, so the C++98 way wouldn't compile:
+
+```
+class Widget {
+public:
+	...
+	template<typename T>
+	void processPointer(T* ptr)
+	{ ... }
+private:
+	template<> // error!
+	void processPointer<void>(void *); 
+}
+```
+
+deleted functions however don't need a different access level and can be deleted from outside the class (namespace scope):
+```
+class Widget {
+public:
+	...
+	template<typename T>
+	void processPointer(T* ptr)
+	{ ... }
+};
+
+template<>
+void Widget::processPointer<void>(void *) = delete;
+```
+
+in summary, any functions may be deleted, including non-member functions and template instantiations
+
+## Item 12: Declare overriding functions override
+
+virtual function implementations in derived classes override the implementations of their base class counterparts
+
+virtual function overriding makes it possible to invoke a derived class function through a base class interface
+
+```
+class Base {
+public:
+	virtual void doWork();
+	...
+};
+
+class Derived: public Base {
+public:
+	virtual void doWork();
+	...
+};
+// create base class pointer to derived class object
+std::unique_ptr<Base> upb = std::make_unique<Derived>();
+...
+// derived class func is invoked
+upb->doWork();
+```
+
+for overriding to occur, several reqs must be met:
+- base class func must be virtual
+- base + derived func names must be identical (except in the case of destructors)
+- parameter types of base + derived class must be identical
+- constness of base + derived functions must be identical
+- return types + exception specifications of base + derived functions must be compatible
+
+to constraints which were already part of C++98, C++11 adds 1 more:
+- the functions' reference qualifiers must be identical. ref qualifiers make it possible to limit a function to lvalues only or rvalues only
+
+```
+class Widget {
+public:
+	void doWork() &; // this ver of doWork only applies when *this is an lvalue
+	
+	void doWork() &&; // only applies when *this is an rvalue
+};
+
+Widget makeWidget(); // returns rvalue
+Widget w; // an lvalue
+
+w.doWork(); // calls Widget::doWork &
+
+makeWidget().doWork(); // calls Widget::doWork &&
+```
+
+if you declare an overriding derived class functions with override, it'll generate compiler errors if there's an error with the overriding
+
+```
+class Base {
+public:
+	virtual void mf1() const;
+	virtual void mf2(int x);
+	virtual void mf3() &;
+	virtual void mf4() const;
+};
+
+class Derived: public {
+public:
+	virtual void mf1() const override;
+	virtual void mf2(int x) override;
+	virtual void mf3() & override;
+	void mf4() const override;
+}
+```
+
+member function reference qualifiers:
+```
+void doSomething(Wiget& w); // accepts only lvalue widgets
+
+void doSomething(Widget&& w); // accepts only rvalue widgets
+```
+
+we can use reference qualifiers to overload functions for lvalue and rvalue objects so that they return lvalues and rvalues respectively:
+
+```
+class Widget {
+public:
+	using DataType = std::vector<double>;
+	...
+	// for lvalue widgets, return lvalues
+	DataType& date() & { return values; }
+	
+	// for rvalue widgets, return rvalues
+	DataType data() && { return std::move(values); } 
+	...
+	
+private:
+	DataType values;
+};
+```
+
+## Item 13: Prefer const_iterators to iterators
+
+in c++11, the container member functions `cbegin` and `cend` produce `const_iterators` for non-const containers + STL member functions that use iterators to identify positions (insert + erase) actually use const_iterators
+
+```
+std::vector<int> values;
+
+auto it = std::find(values.cbegin(), values.cend(), 1983);
+
+values.insert(it, 1998);
+```
+
+we could generalize the code into a find and insert template using C++14's non-member functions. C++11 doesn't have non-member functions for cbegin, cend, ... so this code isn't valid
+
+```
+template<typename C, typename V>
+void findAndInsert(C& container, const V& targetVal, const V& insertVal) {
+	using std::cbegin;
+	using std::cend;
+	
+	auto it = std::find(cbegin(container), cend(container), targetVal);
+	
+	container.insert(it, insertVal);
+}
+```
+
+in C++11, you can add non-member functions:
+
+```
+template<class C>
+auto cbegin(const C& container)->decltype(std::begin(container)) {
+	return std::begin(container);
+}
+```
+
+## Item 15: Use constexpr whenever possible
+
+constexpr objects: const objects that are known at compile time
+
+values known during compilation may be placed in read-only memory
+
+integral values that are constant + known during compilation can be used in contexts where C++ requires an integral constant expression (i.e. for array sizes, enum values, etc.)
+- if you want to sue a variable for these, you want to declare it using constexpr
+
+```
+int sz; // non-constexpr variable
+constexpr auto arraySize1 = sz; // error! sz's value not known @ compilation
+std::array<int, sz> data1; // same error!
+constexpr auto arraySize2 = 10; // fine, 10 is a compile-time constant
+std::array<int, arraySize2> data2; // arraySize2 is constexpr
+```
+
+`const` doesn't offer the same guarantee as `constexpr` cause `const` objects need not be initialized with values known at compile-time
+```
+int sz;
+const auto arraySize = sz; // fine, arraySize is a const copy of sz
+std::array<int, arraySize> data; // error! arraySize's value not known @ compil
+```
+
+all `constexpr` objects are `const` but not all `const` objects are `constexpr`
+
+if you want compilers to guarantee that a variable has a value that can be used in contexts requiring compile-time constants, use `constexpr`
+
+constexpr functions produce compile-time constants when they're called with compile-time constants. if they're called with values not known until run-time, they produce run-time values
+
+for example, we can write a constexpr pow function:
+
+```
+constexpr int pow(int base, int exp) noexcept {
+	...
+}
+constexpr auto numConds = 5;
+std::array<int, pow(3, numConds)> results;
+```
+
+constexpr in front of pow says: if base and exp are compile-time constants, pow's result may be used as a compile-time constant
+
+this means pow can also be called in run-time constants:
+```
+auto base = readFromDB("base");
+auto exp = readFromExp("exponent");
+
+auto baseToExp = pow(base, exp);
+```
+
+restrictions on contents of constexpr functions differ between C++11 and C++14
+
+in C++11, constexpr functions may contain no more than a single executable statement: return
+
+```
+constexpr int pow(int base, int exp) noexcept {
+	return (exp == 0 ? 1 : base * pow(base, exp - 1));
+}
+```
+
+in C++14, the restrictions on constexpr functions are looser, so this works:
+```
+constexpr int pow(int base, int exp) noexcept {
+	auto result = 1;
+	for (int i = 0; i < exp; ++i) result *= base;
+	return result;
+}
+```
+
+constexpr functions can only take + return literal types (types that can have values determined during compilation). this includes all built-in types except void, but user-defined types may be literal too with constexpr constructors + member functions
+
+for example,
+
+```
+class Point {
+public:
+	constexpr Point(double xVal = 0, double yVal = 0) noexcept 
+	: x(xVal), y(yVal) 
+	{}
+	
+	constexpr double xValue() const noexcept { return x; }
+	constexpr double yValue() const noexcept { return y; }
+	
+	void setX(double newX) noexcept { x = newX };
+	void setY(double newY) noexcept { y = newY };
+
+private:
+	double x, y;
+};
+```
+
+Point constructor can be declared constexpr because if the arguments passed to it are known during compilation, the value of the data members of the constructed Point can also be known at compile-time.
+
+Points so initialized could be constexpr:
+```
+constexpr Point p1(9.4, 27.7);
+constexpr Point p2(28.8, 5.3);
+```
+
+getters `xValue` + `yValue` can be `constexpr` because if they're invoked on a Point object with a value known during compilation, the value of data members x + y can be known at compile-time
+```
+constexpr Point midpoint(const Point& p1, const Point& p2) noexcept {
+	return { (p1.xValue() + p2.xValue()) / 2,
+			 (p1.yValue() + p2.yValue()) / 2 }; // call constexpr member funcs
+}
+// init constexpr object with result of constexpr function
+constexpr auto mid = midpoint(p1, p2);
+```
+
+in C++11, setX + setY can't be constexpr b/c they modify the object they operate on, and they have void return types (not a literal type)
+- both restrictions are lifted in C++14, so Point's setters can be constexpr
+
+I/O statements are not permitted in constexpr functions
+
+## Item 16: Make const member functions thread-safe
+
+const member functions don't modify the object like this root-finding function for polynomials:
+
+```
+class Polynomial {
+public:
+	using RootsType = std::vector<double>;
+	
+	RootsType roots() const;
+};
+```
+
+if we implement roots to return a cached value, it looks like this:
+```
+class Polynomial {
+public:
+	using RootsType = std::vector<double>;
+	
+	RootsType roots() const {
+		std::lock_guard<std::mutex> g(m);
+		
+		if (!rootsAreValid) {
+			... // compute roots + store in rootVals
+			rootsAreValid = true;
+		}
+		return rootVals;
+	}
+private:
+	mutable std::mutex m;
+	mutable bool rootsAreValid{ false };
+	mutable RootsType rootVals{};
+};
+```
+
+the mutable keyword allows a data member to be modified by a const member function
+
+imagine 2 threads call Roots on a polynomial object:
+
+```
+Polynomial p;
+
+/* Thread 1 */                /* Thread 2 */
+auto rootsOfP = p.roots();    auto valsGivingZero = p.roots();
+```
+
+this code has a data race without the mutex b/c both threads will try to read + write to rootsAreValid and rootVals
+
+you can also use a std::atomic counter to count calls
+
+```
+class Point {
+public:
+	...
+	double distanceFromOrigin() const noexcept {
+		++callCount;
+		return std::sqrt((x * x) + (y * y));
+	}
+private:
+	mutable std::atomic<unsigned> callCount{ 0 };
+	double x, y;
+};
+```
+
+std::mutexes and std::atomics are move-only types, so the call count in Point means Point can only be moved, not copied
+
+for a single variable or memory location requiring synchronization, use of a std::atomic is adequate, but once you get 2+ variables or memory locations that require syncs, use a mutex
+
+```
+class Widget {
+public:
+	int magicValue() const {
+		std::lock_guard<std::mutex> guard(m);
+		
+		if (cacheValid) return cachedValue;
+		else {
+			auto val1 = expensiveComputation1();
+			auto val2 = expensiveComputation2();
+			cachedValue = val1 + val2;
+			cacheValid = true;
+			return cachedValue;
+		}
+	}
+private:
+	mutable std::mutex m;
+	mutable int cachedValue;
+	mutable bool cacheValid{ false }
+}
+```
