@@ -1,4 +1,5 @@
 
+
 ## Item 1: Understand template type deduction
 
 general form for templates + call to it:
@@ -1427,3 +1428,310 @@ private:
 	mutable bool cacheValid{ false }
 }
 ```
+
+## Item 17: Understand special member function generation
+
+special member functions: ones that C++ is willing to generate on its own
+
+C++98 has 4 such functions:
+- default constructor
+- destructor
+- copy constructor
+- copy assignment operator
+
+functions are only generated if they're needed (some code uses them without their being expressly declared in the class)
+
+in C++11, there are also:
+- the move constructor
+- the move assignment operator
+
+their signatures are:
+
+```
+class Widget {
+public:
+	Widget(Widget&& rhs); // move constructor
+	Widget& operator=(Widget&& rhs); // move assignment operator
+};
+```
+
+move operations won't be generated for any class that explicitly declares a copy operation
+
+declaring a move operation in a class causes compilers to disable copy operations (delete them)
+
+rule of three: if you declare any of a copy constructor, copy assignment operator, or destructor, you should declare all 3
+- the need to take over the meaning  of a copy operation stemmed from the class performing some kind of resource management
+
+C++11 doesn't generate move operations for a class with a user-declared destructor
+
+so move operations are generated for classes only when these 3 conditions are met:
+- no copy operations are declared in the class
+- no move operations are declared in the class
+- no destructor is declared in the class
+
+C++11 deprecates automatic generation of copy operations for classes declaring copy operations or a destructor
+
+if the behavior of compiler-generated functions is correct (member-wise copying of the class's non-static data members is what you want), your job is easy with C++11's "=default":
+```
+class Widget {
+public:
+	...
+	~Widget(); // user-declare dtor
+	
+	// default copy ctor behavior is ok
+	Widget(const Widget&) = default;
+	
+	// default copy assign behavior is ok
+	Widget& operator=(const Widget&) = default; 
+}
+```
+
+user-declared destructors suppress generation of move operations, so if movability is to be supported, use `= default`. declaring move operations disables copy operations, so if copy-ability is also desired, use `= default`
+
+```
+class Base {
+public:
+	virtual ~Base() = default;
+	
+	Base(Base&&) = default; // support moving
+	Base& operator=(Base&&) = default;
+	
+	Base(const Base&) = default; // support copying
+	Base& operator=(const Base&) = default;
+};
+```
+
+if a class defines a destructor, move operations will actually be copy operations
+
+member function templates don't prevent compilers from generating special member functions even though if we instantiate these templates with a Widget, then we product the signatures for the copy constructor + copy assignment operator
+
+```
+class Widget {
+	template<typename T>  // construct Widget from anything
+	Widget(const T& rhs);
+	
+	template<typename T> // assign Widget to anything
+	Widget& operator=(const T& rhs);
+};
+```
+
+## Item 18: Use std::unique_ptr for exclusive-ownership resource management
+
+`std::unique_ptr` does everything `std::auto_ptr` (deprecated leftover from C++98) does plus more
+
+the only functionality common to all smart pointers is default construction
+
+by default `std::unique_ptrs` are the same size as raw pointers
+
+`std::unique_ptr`: exclusive ownership semantics
+
+moving `std::unique_ptr` transfers ownership, so it's a move-only type. copying isn't allowed because you would end up with two `std::unique_ptrs` to the same resource
+
+upon destruction, a non-null `std::unique_ptr` destroys its resource (delete the raw pointer inside `std::unique_ptr`)
+
+`std::unique_ptr` comes in 2 forms: 1 for individual objects (`std::unique_ptr<T>`) and 1 for arrays (`std::unique_ptr<T[]>`)
+
+std::unique_ptr for arrays shouldn't be used because std::array, vector, + string are better data structure choices than raw arrays
+
+`std::unique_ptr` easily + efficiently converts to `std::shared_ptr`
+
+## Item 19: Use std::shared_ptr for shared-ownership resource management
+
+object accessed via `std::shared_ptrs` has its lifetime managed by those pointers through shared ownership
+
+when the last `std::shared_ptr` pointing to an object stops pointing there (ref count is 0), that `std::shared_ptr` destroys the object it points to
+
+downsides:
+- std::shared_ptrs are 2x the size of a raw pointer b/c they must store a pointer to the resource's ref count too
+- ref count is stored as dynamically allocated data
+- increments + decrements of the ref count must be atomic b/c threads can read + write simultaneously
+
+move constructing a std::shared_ptr doesn't change the ref count
+
+for std::unique_ptr, the type of the deleter is part of the type of the smart pointer. for std::shared_ptr, it's not:
+
+```
+// custom deleter
+auto loggingDel = [](Widget *pw) {
+	makeLogEntry(pw);
+	delete pw;
+};
+
+// deleter type is part of ptr type
+std::unique_ptr<Widget, decltype(loggingDel)> upw(new Widget, loggingDel);
+
+// deleter type is not part of ptr type
+std::shared_ptr<Widget> spw(new Widget, loggingDel);
+```
+
+not having custom deleters be part of std::shared_ptrs type makes them more flexible (i.e. shared ptrs with different custom deleters can be part of the same container, can be assigned to 1 another, + passed to a function taking param of type `std::shared_ptr<Widget>`)
+
+```
+// custom deleters, each with a different type
+auto customDeleter1 = [](Widget *pw) { ... };
+auto customDeleter2 = [](Widget *pw) { ... };
+
+std::shared_ptr<Widget> pw1(new Widget, customDeleter1);
+std::shared_ptr<Widget> pw2(new Widget, customDeleter2);
+
+std::vector<std::shared_ptr<Widget>> vpw{ pw1, pw2 }; // container
+```
+
+specifying a custom deleter doesn't change the size of a std::shared_ptr objects
+
+std::shared_ptr contains a pointer to the control block. control block contains ref count, a copy of the custom deleter if specified, custom allocator if specified, weak count
+
+![[Pasted image 20260522221850.png]]
+
+an object's control block is set up by the function creating the 1st `std::shared_ptr` to the object, but it's impossible for a function creating a `std::shared_ptr` to an object to know whether another `std::shared_ptr` already points to that object, so some rules are used:
+- `std::make_shared` always creates a control block 
+	- b/c it manufactures a new object to point to
+- a control block is created when a `std::shared_ptr` is constructed from a unique-ownership pointer (std::unique_ptr or std::auto_ptr)
+	- unique-ownership pointers don't use control blocks, so one shouldn't exist for the pointed-to object
+- when a `std::shared_ptr` constructor is called with a raw pointer, it creates a control block
+
+std::shared_ptr constructors taking std::shared_ptrs or std::weak_ptrs as constructor args don't create new control blocks b/c they can rely on the smart pointers passed to them to point to any necessary control blocks
+
+constructing more than one std::shared_ptr from a single raw pointer give you undefined behavior b/c pointed-to object will have multiple control blocks + be destroyed multiple times
+
+```
+auto pw = new Widget;
+std::shared_ptr<Widget> spw1(pw, loggingDel);
+std::shared_ptr<Widget> spw2(pw, loggingDel); // create 2nd control block for *pw
+```
+
+so avoid passing raw pointers to std::shared_ptr (use std::make_shared unless you're using a custom deleter)
+
+if you must pass a raw pointer to a std::shared_ptr constructor, pass the result of new directly
+
+```
+std::shared_ptr<Widget> spw1(new Widget, loggingDel);
+
+std::shared_ptr<Widget> spw2(spw1); // spw2 uses same control block as spw1
+```
+
+std::shared_ptrs can't be converted back to std::unique_ptrs
+
+std::shared_ptrs can't work with arrays, use std::vector, std::array, or std::string instead
+
+## Item 20: Use std::weak_ptr for std::shared_ptr-like pointers that dangle
+
+
+`std::weak_ptr` can't be dereferenced or tested for nullness
+
+`std::weak_ptr`s are created from `std::shared_ptr`s. they point to the same place but don't affect the ref count of the object they point to
+
+`std::weak_ptrs`s that dangle are expired. you can test for this:
+```
+auto spw = std::make_shared<Widget>(); // pointed-to Widget's RC is 1
+
+std::weak_ptr<Widget> wpw(spw); // RC = 1
+
+spw = nullptr; // RC = 0. Widget destroyed
+
+if (wpw.expired()) ...
+```
+
+separating the check for expired + the dereference introduces a race condition. solution is to create a `std::shared_ptr` from a `std::weak_ptr`
+
+```
+std::shared_ptr<Widget> spw1 = wpw.lock(); // if wpw's expired, spw1 = null
+```
+
+there's also a `std::shared_ptr` constructor that takes a `std::weak_ptr` + throws an exception (`std::bad_weak_ptr`) if it's expired
+
+`std::weak_ptr`'s don't participate in shared ownership of objects + don't affect pointed-to object's ref count
+
+## Item 21: Prefer std::make_unique and std::make_shared to direct use of new
+
+`std::make_unique` and `std::make_shared` take an arbitrary set of args, perfect-forward them to the constructor for a dynamically allocated object, and return a smart pointer to that object
+
+`std::allocate_shared` acts just like `std::make_shared` except its first arg is an allocator object used for dynamic memory allocation
+
+prefer make functions b/c you don't have to repeat the type:
+```
+auto upw1(std::make_unique<Widget>()); // with make func
+
+std::unique_ptr<Widget> upw2(new Widget);
+```
+
+`std::make_shared` helps no resources leak if `computePriority()` throws an exception because the new Widget is safely stored inside the shared pointer
+```
+processWidget(std::make_shared<Widget>(), computePriority());
+```
+
+`std::make_shared` only allocated 1 block of memory for both the Widget object and the control block
+```
+std::shared_ptr<Widget> spw(new Widget);
+
+auto spw = std::make_shared<Widget>();
+```
+
+there are some situations where you shouldn't prefer make functions to new, like when you need a custom deleter, just use the pointer's constructor
+
+```
+auto widgetDeleter = [](Widget* pw) { ... };
+
+std::unique_ptr<Widget, decltype(widgetDeleter)> upw(new Widget, widgetDeleter);
+
+std::shared_ptr<Widget> spw(new Widget, widgetDeleter);
+```
+
+## Item 22: When using the Pimpl Idiom, define special member functions in the implementation file
+
+pointer to implementation (struct)
+
+part 1 of pimpl idiom: declaration of a data member that's a pointer to an incomplete type
+part 2: dynamic allocation + deallocation of the object that holds the data members that used to be in the original class
+
+# Chapter 5: Rvalue References, Move Semantics, and Perfect Forwarding
+
+a parameter is always an lvalue, even if its type is an rvalue reference:
+
+```
+void f(Widget&& w);
+```
+
+here, w is an lvalue even if its type is an rvalue-reference-to-Widget
+
+## Item 23: Understand std::move and std::forward
+
+`std::move` casts its arguments to an rvalue, it doesn't move
+- rvalues are candidates for moving so `std::move` tells the compiler the object is eligible to be moved from
+`std::forward` casts to an rvalue only if its argument was initialized with an rvalue
+
+don't declare objects const if you want to be able to move from them— move request on const are silently transformed into copy operations
+
+## Item 24: Distinguish universal references from rvalue references
+
+universal references `T&&`: can behave as either an rvalue ref or an lvalue ref
+- can bind to rvalues or lvalues, can bind to const or non-const objects, volatile or non-volatile
+
+universal refs arise in 2 contexts:
+- function template parameters:
+```
+template<typename T>
+void f(T&& param);  // param is a universal ref
+```
+
+- auto declarations
+```
+auto&& var2 = var1;
+```
+
+these all have type deduction. if you see `T&&` without type deduction, you're looking at an rvalue reference. like here:
+```
+void f(Widget&& param);
+Widget&& var1 = Widget();
+```
+
+## Item 25: Use std::move on rvalue references, std::forward on universal references.
+
+rvalue refs bind only to objects that are candidates for moving
+
+## Item 26: Avoid overloading on universal references.
+
+the universal ref overload vacuums up more argument types than the developer doing the overloading expects
+
+## Item 27: Familiarize yourself with alternatives to overloading on universal references.
+
